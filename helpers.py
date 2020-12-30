@@ -1,12 +1,15 @@
 import numpy as np
 import math
-from matplotlib import cm
+import matplotlib
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import random
+import logging
 
-def vertex(obj, name, evt, i=None):
-    x = getattr(obj, "_".join([name, "x"]))[evt]
-    y = getattr(obj, "_".join([name, "y"]))[evt]
-    z = getattr(obj, "_".join([name, "z"]))[evt]
+def vertex(obj, name, i=None):
+    x = getattr(obj, "_".join([name, "x"]))
+    y = getattr(obj, "_".join([name, "y"]))
+    z = getattr(obj, "_".join([name, "z"]))
 
     if i is None:
         return np.array([x, y, z])
@@ -52,104 +55,139 @@ def trajectory(initPos, initMom, endz, q):
     return neutralTrajectory(initPos, initMom, endz) if q == 0 else \
                 chargedTrajectory(initPos, initMom, endz, q) 
 
-def labelsFromSimCluster(simHits, hitType, simClusters, evt, label='pdgId', endcap=""):
+def labelsFromSimCluster(simHits, hitType, simClusters, label='pdgId', endcap=""):
     if endcap == "+":
         simHits = simHits[getattr(simHits, hitType+"_z") > 0]
     elif endcap == "-":
         simHits = simHits[getattr(simHits, hitType+"_z") < 0]
 
-    hitsdf = simHits[simHits.index.get_level_values(0) == evt]
-    hitsdf.reset_index(inplace=True)
-
-    clusterIds = simClusters.SimCluster_pdgId[evt].to_numpy()
-    clusterMatch = getattr(hitsdf, hitType+"_SimClusterIdx")
+    clusterIds = simClusters.SimCluster_pdgId.to_numpy()
+    clusterMatch = getattr(simHits, hitType+"_SimClusterIdx")
+    caloMatches = simClusters.SimCluster_CaloPartIdx.to_numpy()
     nhits = len(clusterMatch)
-    nsc = len(simClusters.SimCluster_pdgId[evt])
+    nsc = len(simClusters.SimCluster_pdgId)
     ids = np.zeros(nhits)
+    logging.debug("Found %i SimClusters" % nsc)
+    nfilled = 0
     for i in range(-1, nsc):
-        match = hitsdf.index[clusterMatch == i].to_numpy()
-        ids[match] = i+i if i < 0 or label != 'pdgId' else clusterIds[i]
+        match = simHits.index[clusterMatch == i].to_numpy()
+        if i < 0:
+            ids[match] = nsc+1 if i < 0 else i
+        elif 'simclus' in label:
+            ids[match] = i
+            if len(match):
+                nfilled += 1
+        elif 'calo' in label:
+            ids[match] = caloMatches[i]
+        elif label == 'pdgId':
+            ids[match] = clusterIds[i]
     return ids
 
-def momentumVector(obj, objName, evt, part):
-    pt = getattr(obj, objName+"_pt")[evt].to_numpy()[part]
-    eta = getattr(obj, objName+"_eta")[evt].to_numpy()[part]
-    phi = getattr(obj, objName+"_phi")[evt].to_numpy()[part]
+def momentumVector(obj, objName, part):
+    pt = getattr(obj, objName+"_pt").to_numpy()[part]
+    eta = getattr(obj, objName+"_eta").to_numpy()[part]
+    phi = getattr(obj, objName+"_phi").to_numpy()[part]
 
     return np.array([pt*math.cos(phi), pt*math.sin(phi), pt*math.sinh(eta)])
 
-def idsFromHit(simHits, hitType, evt, endcap=""):
+def idsFromHit(simHits, hitType, endcap=""):
     if endcap == "+":
         simHits = simHits[getattr(simHits, hitType+"_z") > 0]
     elif endcap == "-":
         simHits = simHits[getattr(simHits, hitType+"_z") < 0]
 
-    try:
-        return getattr(simHits, hitType+"_pdgId")[evt].to_numpy()
-    except KeyError:
-        return np.zeros(0)
+    return getattr(simHits, hitType+"_pdgId").to_numpy()
 
-def hitPositionArray(simHits, hitType, evt, endcap=""):
-    if endcap == "+":
-        simHits = simHits[getattr(simHits, hitType+"_z") > 0]
-    elif endcap == "-":
-        simHits = simHits[getattr(simHits, hitType+"_z") < 0]
-
+def hitPositionArray(simHits, hitType):
     xhits = getattr(simHits, hitType+"_x")
-    try:
-        xhits = xhits[evt].to_numpy()
-    except KeyError:
-        return np.zeros(shape=(1,3))
     position = np.zeros(shape=(len(xhits), 3))
     position[:,0] = xhits
-    position[:,1] = getattr(simHits, hitType+"_y")[evt].to_numpy()
-    position[:,2] = getattr(simHits, hitType+"_z")[evt].to_numpy()
+    position[:,1] = getattr(simHits, hitType+"_y").to_numpy()
+    position[:,2] = getattr(simHits, hitType+"_z").to_numpy()
     return position
 
 def colorsFromIds(ids):
     colormap = {-1 : 'grey', 111 : "red", 211 : 'blue', 11 : 'green', 13 : 'orange', 22 : "lightblue", 
-                    2112 : "pink", 2212 : "pink"}
+                    2112 : "pink", 2212 : "purple"}
     return [colormap[abs(i)] if abs(i) in colormap else 'black' for i in ids]
 
-def drawHits(ax, df, label, evt, endcap, simClusters=None, colorby='pdgId'):
-    hits = hitPositionArray(df, label, evt, endcap)
+def drawSimClusters(ax, df, endcap=""):
+    label = "SimCluster_impactPoint" 
+    if not hasattr(df, label):
+        label = "SimCluster_lastPos"
+    points = hitPositionArray(df, label)
+    nsc = len(df)
+    norm = matplotlib.colors.Normalize(vmin=-1, vmax=nsc)
+    colormap = matplotlib.cm.get_cmap("gist_rainbow")
+    #colormap = matplotlib.cm.get_cmap("tab20")
+    plt.set_cmap(colormap)
+    print("Number of points", len(points))
+    #colors = np.array([i if i % 2 else nsc-i for i in range(nsc)])
+    colors = 'black'
+    ax.scatter(points[:,2], points[:,0], points[:,1], marker='x', c=colors, norm=norm, s=100)
+
+def drawHits(ax, df, label, endcap, simClusters=None, colorby='pdgId'):
+    if endcap == "+":
+        df = df[getattr(df, label+"_z") > 0]
+    elif endcap == "-":
+        df = df[getattr(df, label+"_z") < 0]
+    df.reset_index(inplace=True)
+    hits = hitPositionArray(df, label)
+    nhits = len(getattr(df, label+"_x").to_numpy())
+
+    print("Number of hits is", nhits)
     if simClusters is None:
-        ids = idsFromHit(df, label, evt, endcap)
+        ids = idsFromHit(df, label, endcap)
     else:
-        ids = labelsFromSimCluster(df, label, simClusters, evt, colorby, endcap)
+        ids = labelsFromSimCluster(df, label, simClusters, colorby, endcap)
 
     if colorby == 'pdgId':
         colors = colorsFromIds(ids)
+        norm = None
     else:
-        colormap = cm.get_cmap("tab20")
-        colors = [random.uniform(0, 1) for i in ids]
-    ax.scatter(hits[:,2], hits[:,0], hits[:,1], marker='o', c=colors, s=1)    
+        colormap = matplotlib.cm.get_cmap("gist_rainbow")
+        #colormap = matplotlib.cm.get_cmap("tab20")
+        plt.set_cmap(colormap)
+        nsc = len(simClusters)
+        norm = matplotlib.colors.Normalize(vmin=-1, vmax=nsc)
+        print("The number of unique IDs is", len(np.unique(ids)))
+        print("The number of unique colors is", len(np.unique(norm(ids))))
+        print("Number of SCs is", len(simClusters))
+        colors = [i if i % 2 else nsc-i for i in ids]
 
-def drawGenParts(ax, df, label, vertex, evt, endcap):
-    pdgids = getattr(df, label+"_pdgId")[evt]
+    ax.scatter(hits[:,2], hits[:,0], hits[:,1], marker='o', c=colors, norm=norm, s=1)
+
+def drawGenParts(ax, df, label, vertex, endcap):
+    pdgids = getattr(df, label+"_pdgId")
     for i, pdgid in enumerate(pdgids):
-        eta = getattr(df, label+"_eta")[evt][i]
+        eta = getattr(df, label+"_eta")[i]
+        pt = getattr(df, label+"_pt")[i]
+        print("pt is", pt)
         if (eta > 0 and endcap == "-") or (eta < 0 and endcap == "+"):
             continue
-        charge = getattr(df, label+"_charge")[evt][i]
-        momentum = momentumVector(df, label, evt, i)
+        charge = getattr(df, label+"_charge")[i]
+        momentum = momentumVector(df, label, i)
         endz = 500 if momentum[2] > 0 else -500
         points = trajectory(vertex, momentum, endz, charge)
         color = colorsFromIds([pdgids[i]])[0]
         ax.plot(points[:,2], points[:,0], points[:,1], c=color)
 
-def drawTrackingParts(ax, df, label, evt, endcap, ptcut=1):
-    pts = getattr(df, label+"_pt")[evt]
-    etas = getattr(df, label+"_eta")[evt]
+def drawTrackingParts(ax, df, label, endcap, ptcut=1, hasDecay=True):
+    pts = getattr(df, label+"_pt")
+    etas = getattr(df, label+"_eta")
+    tot = 0 
     for i, (pt, eta) in enumerate(zip(pts, etas)):
         if (eta > 0 and endcap == "-") or (eta < 0 and endcap == "+") or pt < ptcut:
             continue
-        vtx = vertex(df, label+"_Vtx", evt, i)
-        decayvtx = vertex(df, label+"_DecayVtx", evt, i)
-        mom = momentumVector(df, label, evt, i)
-        pdgid = getattr(df, label+"_pdgId")[evt].to_numpy()[i]
-        charge = getattr(df, label+"_charge")[evt].to_numpy()[i]
+        tot += 1
+        vtx = vertex(df, label+"_Vtx", i)
+        decayvtx = vertex(df, label+"_DecayVtx", i) if hasDecay else np.array([10000]*3)
+        mom = momentumVector(df, label, i)
+        pdgid = getattr(df, label+"_pdgId").to_numpy()[i]
+        charge = getattr(df, label+"_charge").to_numpy()[i]
         maxend = 700 if abs(pdgid) == 13 else 400
         end = decayvtx[2] if decayvtx[2] < 10000 else (maxend if mom[2] > 0 else -1*maxend)
         points = trajectory(vtx, mom, end, charge)
         ax.plot(points[:,2], points[:,0], points[:,1], color=colorsFromIds([pdgid])[0])
+        print("Particle ID is", pdgid, "pt is", pt, "eta is", eta)
+    print("Number of particles plotted was ", tot)
