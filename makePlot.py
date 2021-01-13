@@ -11,6 +11,7 @@ import os
 import logging
 import shutil
 import plotly.graph_objects as go
+import logging
 
 class HitsAndTracksPlotter(object):
     def __init__(self, rtfile, outpath):
@@ -23,14 +24,15 @@ class HitsAndTracksPlotter(object):
 
         self.showPixelHits = True
         self.showMuonHits = True
-        self.showGen = True
-        self.showCaloPart = True
-        self.showTracking  = True
+        self.showGen = False
+        self.showCaloPart = False
+        self.showTracking  = False
         self.colorBy = 'pdgId'
         self.trackingCut = 1
         self.nThreads = 0
         self.endcap = ""
         self.showTICL = False
+        self.recHits = False
         
         self.allGen = rtfile["Events"].pandas.df(["GenPart*"], flatten=True)
         self.allGenVtx = rtfile["Events"].pandas.df(["GenVtx*"], flatten=True)
@@ -39,11 +41,17 @@ class HitsAndTracksPlotter(object):
         self.allTicl = rtfile["Events"].pandas.df(["PFTICLCand*"], flatten=True)
         self.allPf = rtfile["Events"].pandas.df(["PFCand*"], flatten=True)
         if not self.allPf.empty:
-            self.allPf = self.allPf[(self.allPf.PFCand_eta < -1.6) | (self.allPf.PFCand_eta > 1.6)]
+            self.allPf = self.allPf[(self.allPf.PFCand_eta < -1.5) | (self.allPf.PFCand_eta > 1.5)]
 
+        self.allRecHitsHGCEE = rtfile["Events"].pandas.df(["RecHitHGCEE*"], flatten=True)
+        self.allRecHitsHGCHEF = rtfile["Events"].pandas.df(["RecHitHGCHEF*"], flatten=True)
+        self.allRecHitsHGCHEB = rtfile["Events"].pandas.df(["RecHitHGCHEB*"], flatten=True)
+
+        self.allSimClusters = rtfile["Events"].pandas.df(["SimCluster*"], flatten=True)
         self.allSimHitsHGCEE = rtfile["Events"].pandas.df(["SimHitHGCEE*"], flatten=True)
-        self.allSimHitsHGCHEfront = rtfile["Events"].pandas.df(["SimHitHGCHEfront*"], flatten=True)
-        self.allSimHitsHGCHEback = rtfile["Events"].pandas.df(["SimHitHGCHEback*"], flatten=True)
+        self.allSimHitsHGCHEF = rtfile["Events"].pandas.df(["SimHitHGCHEF*"], flatten=True)
+        self.allSimHitsHGCHEB = rtfile["Events"].pandas.df(["SimHitHGCHEB*"], flatten=True)
+
         self.allSimClusters = rtfile["Events"].pandas.df(["SimCluster*"], flatten=True)
         self.allSimHitsPixelEC = rtfile["Events"].pandas.df(["SimHitPixelEC*"], flatten=True)
         self.allSimHitsPixel = rtfile["Events"].pandas.df(["SimHitPixelLowTof*"], flatten=True)
@@ -56,12 +64,15 @@ class HitsAndTracksPlotter(object):
         self.pf = self.allPf
 
         self.simHitsHGCEE = self.allSimHitsHGCEE 
-        self.simHitsHGCHEfront = self.allSimHitsHGCHEfront 
-        self.simHitsHGCHEback = self.allSimHitsHGCHEback 
+        self.simHitsHGCHEF = self.allSimHitsHGCHEF 
+        self.simHitsHGCHEB = self.allSimHitsHGCHEB 
         self.simClusters = self.allSimClusters 
         self.simHitsPixelEC = self.allSimHitsPixelEC 
         self.simHitsPixel = self.allSimHitsPixel 
         self.simHitsCSC = self.allSimHitsCSC 
+
+    def setRecHits(self, rechits):
+        self.recHits = rechits
 
     def setShowTICL(self, show):
         self.showTICL = show
@@ -113,9 +124,21 @@ class HitsAndTracksPlotter(object):
         if not self.allTicl.empty:
             self.ticl = self.allTicl.xs(evt, level="entry")
 
+        if self.recHits:
+            self.recHitsHGCEE = self.allRecHitsHGCEE.xs(evt, level="entry")
+            self.recHitsHGCHEF = self.allRecHitsHGCHEF.xs(evt, level="entry")
+            self.recHitsHGCHEB = self.allRecHitsHGCHEB.xs(evt, level="entry")
+
+            self.recHitsHGCEE = self.recHitsHGCEE[~((self.recHitsHGCEE["RecHitHGCEE_energy"] < 0.01) &
+                                        (self.recHitsHGCEE["RecHitHGCEE_SimClusterIdx"] < 0))]
+            self.recHitsHGCHEF = self.recHitsHGCHEF[~((self.recHitsHGCHEF["RecHitHGCHEF_energy"] < 0.1) &
+                                        (self.recHitsHGCHEF["RecHitHGCHEF_SimClusterIdx"] < 0))]
+            self.recHitsHGCHEB = self.recHitsHGCHEB[~((self.recHitsHGCHEB["RecHitHGCHEB_energy"] < 0.01) &
+                                        (self.recHitsHGCHEB["RecHitHGCHEB_SimClusterIdx"] < 0))]
+
         self.simHitsHGCEE = self.allSimHitsHGCEE.xs(evt, level="entry")
-        self.simHitsHGCHEfront = self.allSimHitsHGCHEfront.xs(evt, level="entry")
-        self.simHitsHGCHEback = self.allSimHitsHGCHEback.xs(evt, level="entry")
+        self.simHitsHGCHEF = self.allSimHitsHGCHEF.xs(evt, level="entry")
+        self.simHitsHGCHEB = self.allSimHitsHGCHEB.xs(evt, level="entry")
         self.simClusters = self.allSimClusters.xs(evt, level="entry")
         self.simHitsPixelEC = self.allSimHitsPixelEC.xs(evt, level="entry")
         self.simHitsPixel = self.allSimHitsPixel.xs(evt, level="entry")
@@ -146,8 +169,8 @@ class HitsAndTracksPlotter(object):
 
     def makePlot(self, evt, name, angle=None):
         print(evt, name, angle)
-        fig = plt.figure(figsize=[10, 10])
-        ax = fig.add_subplot(111, projection='3d')
+        #fig = plt.figure(figsize=[10, 10])
+        #ax = fig.add_subplot(111, projection='3d')
 
         self.filterEvent(evt)
 
@@ -158,28 +181,51 @@ class HitsAndTracksPlotter(object):
         elif self.endcap == "-":
             df = df[getattr(df, label+"_z") < 0]
 
-        helpers.drawHits(ax, self.simHitsHGCEE, "SimHitHGCEE", self.endcap, df, self.colorBy)
-        helpers.drawHits(ax, self.simHitsHGCHEfront, "SimHitHGCHEfront", self.endcap, df, self.colorBy)
-        helpers.drawHits(ax, self.simHitsHGCHEback, "SimHitHGCHEback", self.endcap, df, self.colorBy)
+        if not self.recHits:
+            hitsHGCEE = helpers.drawHits(self.simHitsHGCEE, "SimHitHGCEE", self.endcap, df, self.colorBy)
+            hitsHGCHEF = helpers.drawHits(self.simHitsHGCHEF, "SimHitHGCHEF", self.endcap, df, self.colorBy)
+            hitsHGCHEB = helpers.drawHits(self.simHitsHGCHEB, "SimHitHGCHEB", self.endcap, df, self.colorBy)
+        else:
+            hitsHGCEE = helpers.drawHits(self.recHitsHGCEE, "RecHitHGCEE", self.endcap, df, self.colorBy)
+            hitsHGCHEF = helpers.drawHits(self.recHitsHGCHEF, "RecHitHGCHEF", self.endcap, df, self.colorBy)
+            hitsHGCHEB = helpers.drawHits(self.recHitsHGCHEB, "RecHitHGCHEB", self.endcap, df, self.colorBy)
 
+        data = [hitsHGCEE, hitsHGCHEF, hitsHGCHEB]
+        data.append(helpers.drawTracker())
+        data.extend(helpers.drawCSCME1())
+        data.extend(helpers.drawHGCFront())
+        layout = go.Layout(title="5 particle gun",
+                            scene = dict(
+                                aspectmode='data',
+                                xaxis=dict(range=[-1500, 1500], title="z (beamline)",
+                                    showgrid=True, gridcolor='#aebacf', 
+                                    showbackground=True, backgroundcolor='#fafcff'),
+                                yaxis=dict(range=[-400, 400], title="x",
+                                    showgrid=True, gridcolor='white', 
+                                    showbackground=True, backgroundcolor='#fafcff'),
+                                zaxis=dict(range=[-400, 400], title="y", 
+                                    showgrid=True, gridcolor='white', 
+                                    showbackground=True, backgroundcolor='#f7faff'),
+                                ),
+                            )
         if self.showPixelHits:
-            print("Drawing pixel")
-            helpers.drawHits(ax, self.simHitsPixel, "SimHitPixelLowTof", self.endcap)
-            helpers.drawHits(ax, self.simHitsPixelEC, "SimHitPixelECLowTof", self.endcap)
+            data.append(helpers.drawHits(self.simHitsPixel, "SimHitPixelLowTof", self.endcap))
+            data.append(helpers.drawHits(self.simHitsPixelEC, "SimHitPixelECLowTof", self.endcap))
         if self.showMuonHits:
-            helpers.drawHits(ax, self.simHitsCSC, "SimHitMuonCSC", self.endcap)
+            data.append(helpers.drawHits(self.simHitsCSC, "SimHitMuonCSC", self.endcap))
 
         if self.showPF:
-            helpers.drawTrackingParts(ax, self.pf, "PFCand", self.endcap, 0, False)
+            data.extend(helpers.drawParticles(self.pf, "PFCand", ptcut=self.trackingCut))
         if self.showTICL:
-            helpers.drawTrackingParts(ax, self.ticl, "PFTICLCand", self.endcap, 0, False)
+            data.extend(helpers.drawParticles(self.ticl, "PFTICLCand", ptcut=self.trackingCut))
         if self.showCaloPart:
-            helpers.drawGenParts(ax, self.calo, "CaloPart", self.genVtx, self.endcap)
+            data.extend(helpers.drawParticles(self.calo, "CaloPart", self.genVtx, self.trackingCut))
         if self.showGen:
-            helpers.drawGenParts(ax, self.gen, "GenPart", self.genVtx, self.endcap)
+            data.extend(helpers.drawParticles(self.gen, "GenPart", self.genVtx, self.trackingCut))
         if self.showTracking:
-            helpers.drawTrackingParts(ax, self.tracking, "TrackingPart", self.endcap, self.trackingCut)
-        #helpers.drawSimClusters(ax, df, self.endcap)
+            data.extend(helpers.drawParticles(self.tracking, "TrackingPart", ptcut=self.trackingCut, decay=True))
+
+        fig = go.Figure(data = data, layout = layout)
 
         zlim = [-600,600]
         #zlim = [0,500]
@@ -188,21 +234,18 @@ class HitsAndTracksPlotter(object):
         elif self.endcap == "-":
             zlim = [-600, 0]
 
-        ax.set_xlim3d(*zlim)
-        ax.set_ylim3d(-150,150)
-        ax.set_zlim3d(-150,150)
-        ax.set_xlabel('z pos')
-        ax.set_ylabel('x pos')
-        ax.set_zlabel('y pos')
-        dpi=300
         if angle is not None:
             ax.view_init(30, angle)
             print(name)
             name += "_angle%i.png" % angle
             print(name)
             dpi = 100
-        fig.savefig("/".join([self.outpath, name]), dpi=dpi)
-        plt.close(fig)
+        outfile = "/".join([self.outpath, name])+".html"
+        fig.write_html(outfile)
+        logging.info("Wrote file %s" % outfile)
+        out = fig.to_html(full_html=False, include_plotlyjs='cdn')
+        with open("test.html", "w") as f:
+            f.write(out)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--endcap", type=str, choices=["+","-"], default="", help="plot only one endcap")
@@ -217,6 +260,7 @@ parser.add_argument("--caloPart", action='store_true', help="Show calo particles
 parser.add_argument("--ticl", action='store_true', help="Show TICL cands")
 parser.add_argument("--pf", action='store_true', help="Show PF cands")
 parser.add_argument("--gen", action='store_true', help="Don't show gen particles")
+parser.add_argument("--rechits", action='store_true', help="Show RecHits instead of SimHits")
 parser.add_argument("--colorBy", choices=['pdgId', 'simclus', 'calopart'], default="pdgId", help="Color calo hits by pdgId or SimCluster association")
 parser.add_argument("--default", action='store_true', help="Use default (not fine calo) input")
 parser.add_argument("-j", "--nCores", type=int, default=0, help="Number of cores, currently only for movie making")
@@ -232,9 +276,9 @@ if args.movie and args.path == parser.get_default('path'):
     args.path = args.path.replace("www/", "")
 
 plotter = HitsAndTracksPlotter(
-    #"/eos/cms/store/cmst3/group/hgcal/CMG_studies/kelong/GeantTruthStudy/SimClusterNtuples/test_ExactShoot5Part_seed0_nano.root",
-    "/home/kelong/work/ML4Reco/defaultCMSSW/CMSSW_11_2_0_pre9/src/production_tests/Nano_SinglePion150To200_seed0.root" if args.default else \
-        "/home/kelong/work/ML4Reco/CMSSW_11_2_0_pre9/src/production_tests/Nano_SinglePion150To200_seed0_fineCaloSC.root",
+    "/home/kelong/work/ML4Reco/CMSSW_11_2_0_pre9/src/production_tests/Gun5Part_E15To500GeV_seed0_nano.root",
+    #"/home/kelong/work/ML4Reco/defaultCMSSW/CMSSW_11_2_0_pre9/src/production_tests/Nano_SinglePion150To200_seed0.root" if args.default else \
+        #"/home/kelong/work/ML4Reco/CMSSW_11_2_0_pre9/src/production_tests/Nano_SinglePion150To200_seed0_fineCaloSC.root",
         #"/home/kelong/work/ML4Reco/CMSSW_11_2_0_pre9/src/production_tests/Nano_SinglePion150To200_seed0.root",
     args.path if not args.subfolder else "/".join([args.path, args.subfolder]))
 
@@ -242,6 +286,7 @@ plotter.setEndcap(args.endcap)
 plotter.setNumThreads(args.nCores)
 plotter.setTrackingCut(args.cut)
 plotter.setShowGenPart(args.gen)
+plotter.setRecHits(args.rechits)
 plotter.setShowCaloPart(args.caloPart)
 plotter.setShowTICL(args.ticl)
 plotter.setShowPF(args.pf)
