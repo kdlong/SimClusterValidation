@@ -1,7 +1,6 @@
 import numpy as np
 import math
-import matplotlib
-import matplotlib.pyplot as plt
+import matplotlib.cm
 import matplotlib._color_data as mcd
 import plotly.graph_objects as go
 import random

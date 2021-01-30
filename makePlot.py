@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-import uproot
-from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+#import uproot
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+import uproot3 as uproot
 import helpers
 import numpy as np
 import math
@@ -31,7 +32,7 @@ class HitsAndTracksPlotter(object):
         self.showTracking  = False
         self.colorBy = 'pdgId'
         self.trackingCut = 1
-        self.nThreads = 0
+        self.nThreads = 1
         self.endcap = ""
         self.showTICL = False
         self.showTracks = False
@@ -100,7 +101,6 @@ class HitsAndTracksPlotter(object):
         self.showCaloPart = show
 
     def setShowTrackHits(self, show):
-        print("Show track hits!")
         self.showPixelHits = show
         self.showMuonHits = show
 
@@ -180,16 +180,12 @@ class HitsAndTracksPlotter(object):
         if not self.allSimHitsCSC.empty:
             try:
                 self.simHitsCSC = self.allSimHitsCSC.xs(evt, level="entry")
-                logging.info("found CSC hits for event")
             except KeyError:
                 logging.warning("No CSC hits found for event")
                 self.simHitsCSC = pandas.DataFrame()
 
-        #if not self.recHits:
-        #    dfee = self.recHitsHGCEE 
-        #    dfhef = self.recHitsHGCHEF
-        #    dfheb = self.recHitsHGCHEB
-
+        # TODO: Make configurable
+        # Remove SCs off face
         if not True:
             zpos = self.simClusters.SimCluster_impactPoint_z.to_numpy()
             nhits = self.simClusters.SimCluster_nHits.to_numpy()
@@ -200,7 +196,6 @@ class HitsAndTracksPlotter(object):
             for df, label in [(self.simHitsHGCEE, "SimHitHGCEE"), (self.simHitsHGCHEF, "SimHitHGCHEF"), 
                                                                     (self.simHitsHGCHEB, "SimHitHGCHEB")]:
                 idx = df[label+"_SimClusterIdx"]
-                print(idx)
                 zposfilt = zpos[idx]
                 nhitsfilt = nhits[idx]
                 df.loc[((abs(zposfilt) - face) > tol) | (nhitsfilt < minhits), label+"_SimClusterIdx"] = -1
@@ -210,15 +205,14 @@ class HitsAndTracksPlotter(object):
             self.mergedSimClusters = self.mergedSimClusters[((abs(zpos) - face) < tol) & (nhits > minhits)]
 
     def __call__(self, args):
-        self.makePlot(*args)
+        return self.makePlot(*args)
 
     def runPlots(self, inputs):
-        if self.nThreads > 0:
+        if self.nThreads > 1:
             p = multiprocessing.Pool(processes=min(self.nThreads, len(inputs)))
-            p.map(self, inputs)
+            return p.map(self, inputs)
         else:
-            for i in inputs:
-                self.makePlot(*i)
+            return [x for x in map(self, inputs)]
 
     def makeMoviePlot(self, events, basename):
         for e in events:
@@ -230,7 +224,7 @@ class HitsAndTracksPlotter(object):
             f.write("ffmpeg -f image2 -r 20 -i ./{name}_angle%d.png -f mp4 -q:v 0 -vcodec mpeg4 -r 20 {name}.mp4".format(name=name))
 
     def makePlots(self, events, basename):
-        self.runPlots([[e, '_'.join([basename, "evt%i" % e])] for e in  events])
+        return self.runPlots([[e, '_'.join([basename, "evt%i" % e])] for e in  events])
 
     def makePlot(self, evt, name, angle=None):
         self.filterEvent(evt)
@@ -273,7 +267,6 @@ class HitsAndTracksPlotter(object):
         if self.showTICL:
             data.extend(helpers.drawParticles(self.ticl, "PFTICLCand", ptcut=self.trackingCut))
         if self.showCaloPart:
-            print(self.colorBy, (self.colorBy == "calopart"))
             data.extend(helpers.drawParticles(self.calo, "CaloPart", self.genVtx, self.trackingCut,
                colorbyIdx=(self.colorBy == "calopart")))
         if self.showGen:
@@ -296,81 +289,87 @@ class HitsAndTracksPlotter(object):
 
         fig = go.Figure(data = data, layout = layout)
 
-        zlim = [-600,600]
-        #zlim = [0,500]
-        if self.endcap == "+":
-            zlim = [0, 500]
-        elif self.endcap == "-":
-            zlim = [-600, 0]
-
         if angle is not None:
             ax.view_init(30, angle)
-            print(name)
             name += "_angle%i.png" % angle
-            print(name)
             dpi = 100
         outfile = "/".join([self.outpath, name])+".html"
         fig.write_html(outfile)
         logging.info("Wrote file %s" % outfile)
-        out = fig.to_html(full_html=False, include_plotlyjs='cdn')
-        with open("test.html", "w") as f:
-            f.write(out)
+        out = fig.to_html(full_html=True, include_plotlyjs='cdn')
+        if False:
+            with open("test.html", "w") as f:
+                f.write(out)
+        return out
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--endcap", type=str, choices=["+","-"], default="", help="plot only one endcap")
-parser.add_argument("-e", "--events", type=str, nargs='*', required=True, help="Which event to plot")
-parser.add_argument("-o", "--outfile", type=str, required=True, help="Name of output file")
-parser.add_argument("-p", "--path", type=str, default="/eos/user/k/kelong/www/ML4Reco/PFParticleValidation", help="output path")
-parser.add_argument("-s", "--subfolder", type=str, default="", help="append folder to output path")
-parser.add_argument("-m", "--movie", action='store_true', help="Produce scan in angle that can be made into a movie")
-parser.add_argument("--noTrackHits", action='store_true', help="Don't show hits in tracker")
-parser.add_argument("--tracking", action='store_true', help="Don't show tracking particles")
-parser.add_argument("--tracks", action='store_true', help="Don't show reco tracks")
-parser.add_argument("--caloPart", action='store_true', help="Show calo particles")
-parser.add_argument("--ticl", action='store_true', help="Show TICL cands")
-parser.add_argument("--pf", action='store_true', help="Show PF cands")
-parser.add_argument("--gen", action='store_true', help="Don't show gen particles")
-parser.add_argument("--rechits", action='store_true', help="Show RecHits instead of SimHits")
-parser.add_argument("--colorBy", choices=['pdgId', 'pfcand', 'mergedsimclus', 'simclus', 'calopart'], 
-                    default="pdgId", help="Color calo hits by pdgId or SimCluster association")
-parser.add_argument("--simclus", choices=['none', 'merged', 'default', ], 
-                    default="none", help="Draw (or not) merged or default simClusters")
-parser.add_argument("--simtracks", action='store_true', help="show simtracks")
-parser.add_argument("--default", action='store_true', help="Use default (not fine calo) input")
-parser.add_argument("-j", "--nCores", type=int, default=0, help="Number of cores, currently only for movie making")
-parser.add_argument("-c", "--cut", type=float, default=1, help="Tracking particle pt cut")
-parser.add_argument("-f", "--inputFile", type=str, help="Input ROOT file, in NanoML format",
-    default="/home/kelong/work/ML4Reco/CMSSW_11_2_0_pre9/src/production_tests/Gun5Part_E15To500GeV_seed0_nano.root")
+def parseArgs():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-e", "--events", type=str, nargs='*', required=True, help="Which event to plot")
+    parser.add_argument("-o", "--outfile", type=str, required=True, help="Name of output file")
+    parser.add_argument("-p", "--path", type=str, default="/eos/user/k/kelong/www/ML4Reco/PFParticleValidation", help="output path")
+    parser.add_argument("-s", "--subfolder", type=str, default="", help="append folder to output path")
+    parser.add_argument("-m", "--movie", action='store_true', help="Produce scan in angle that can be made into a movie")
+    parser.add_argument("--noTrackHits", action='store_true', help="Don't show hits in tracker")
+    parser.add_argument("--tracking", action='store_true', help="Don't show tracking particles")
+    parser.add_argument("--tracks", action='store_true', help="Don't show reco tracks")
+    parser.add_argument("--caloPart", action='store_true', help="Show calo particles")
+    parser.add_argument("--ticl", action='store_true', help="Show TICL cands")
+    parser.add_argument("--pf", action='store_true', help="Show PF cands")
+    parser.add_argument("--gen", action='store_true', help="Don't show gen particles")
+    parser.add_argument("--rechits", action='store_true', help="Show RecHits instead of SimHits")
+    parser.add_argument("--colorBy", choices=['pdgId', 'pfcand', 'mergedsimclus', 'simclus', 'calopart'], 
+                        default="pdgId", help="Color calo hits by pdgId or SimCluster association")
+    parser.add_argument("--simclus", choices=['none', 'merged', 'default', ], 
+                        default="none", help="Draw (or not) merged or default simClusters")
+    parser.add_argument("--simtracks", action='store_true', help="show simtracks")
+    parser.add_argument("--default", action='store_true', help="Use default (not fine calo) input")
+    parser.add_argument("-j", "--nCores", type=int, default=0, help="Number of cores, currently only for movie making")
+    parser.add_argument("-c", "--cut", type=float, default=1, help="Tracking particle pt cut")
+    parser.add_argument("-f", "--inputFile", type=str, help="Input ROOT file, in NanoML format",
+        default="/home/kelong/work/ML4Reco/CMSSW_11_2_0_pre9/src/production_tests/Gun5Part_E15To500GeV_seed0_nano.root")
 
-args = parser.parse_args()
-if len(args.events) == 1 and ":" in args.events[0]:
-    args.events = range(*[int(i) for i in args.events[0].split(":")])
-else:
-    args.events = [int(i) for i in args.events]
+    args = parser.parse_args()
+    if len(args.events) == 1 and ":" in args.events[0]:
+        args.events = range(*[int(i) for i in args.events[0].split(":")])
+    else:
+        args.events = [int(i) for i in args.events]
 
-if args.movie and args.path == parser.get_default('path'):
-    args.path = args.path.replace("www/", "")
+    if args.movie and args.path == parser.get_default('path'):
+        args.path = args.path.replace("www/", "")
 
-plotter = HitsAndTracksPlotter(
-    args.inputFile,
-    args.path if not args.subfolder else "/".join([args.path, args.subfolder]))
+    return vars(args)
 
-plotter.setEndcap(args.endcap)
-plotter.setNumThreads(args.nCores)
-plotter.setTrackingCut(args.cut)
-plotter.setShowGenPart(args.gen)
-plotter.setRecHits(args.rechits)
-plotter.setShowCaloPart(args.caloPart)
-plotter.setShowTICL(args.ticl)
-plotter.setShowPF(args.pf)
-plotter.setShowTrackingPart(args.tracking)
-plotter.setShowTracks(args.tracks)
-plotter.setShowTrackHits(not args.noTrackHits)
-plotter.setShowSimClusters(args.simclus)
-plotter.setShowSimTracks(args.simtracks)
-plotter.setColorBy(args.colorBy)
+def configureAndPlot(**kwargs):
+    subfolder = kwargs.get("subfolder", "")
+    path = kwargs.get("path", ".")
+    plotter = HitsAndTracksPlotter(
+        kwargs.get("inputFile"),
+        path if not subfolder else "/".join([path, subfolder]))
 
-if not args.movie:
-    plotter.makePlots(args.events, args.outfile)
-else:
-    plotter.makeMoviePlot(args.events, args.outfile)
+    plotter.setNumThreads(kwargs.get("nCores", 1))
+    plotter.setTrackingCut(kwargs.get("cut", 1))
+    plotter.setShowGenPart(kwargs.get("gen", False))
+    plotter.setRecHits(kwargs.get("rechits", False))
+    plotter.setShowCaloPart(kwargs.get("caloPart", False))
+    plotter.setShowTICL(kwargs.get("ticl", False))
+    plotter.setShowPF(kwargs.get("pf", False))
+    plotter.setShowTrackingPart(kwargs.get("tracking", False))
+    plotter.setShowTracks(kwargs.get("tracks", False))
+    plotter.setShowTrackHits(not kwargs.get("noTrackHits", False))
+    plotter.setShowSimClusters(kwargs.get("simclus", "none"))
+    plotter.setShowSimTracks(kwargs.get("simtracks", False))
+    plotter.setColorBy(kwargs.get("colorBy", "pdgId"))
+
+    outfile = kwargs.get("outfile", "temp")
+    events = kwargs.get("events", [0])
+    if not kwargs.get("movie", False):
+        return plotter.makePlots(events, outfile)
+    else:
+        return plotter.makeMoviePlot(events, outfile)
+
+def main():
+    args = parseArgs()
+    configureAndPlot(**args)
+
+if __name__ == "__main__":
+    main()
